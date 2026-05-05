@@ -120,6 +120,7 @@ class FireEscapeGame:
 
         # Start menu state
         self.show_menu = True
+        self.screen_state = "menu"  # "menu", "playing", "win", or "game_over"
         self.selected_mode = 1  # 1=Manual, 2=AI Auto, 3=Challenge
         self.active_mode = MODE_MANUAL
         # External checks may expect a `game_mode` attribute name; keep alias in sync.
@@ -145,7 +146,33 @@ class FireEscapeGame:
         """Start a fresh game using the menu selections."""
         self._setup_game()
         self.show_menu = False
+        self.screen_state = "playing"
         self._apply_selected_mode()
+
+    def go_to_menu(self):
+        """Return to the main menu from any game screen.
+        
+        This method stops gameplay, clears temporary state, and returns to the
+        main menu without closing the window or restarting the game. Difficulty
+        and mode selections are preserved.
+        """
+        # Stop gameplay immediately
+        self.show_menu = True
+        self.screen_state = "menu"
+        self.ai_mode = False
+        self.challenge_active = False
+        self.current_path = []
+        
+        # Clear end-game state
+        self.game_won = False
+        self.game_over = False
+        self.lose_reason = None
+        self.status_message = ""
+        self.temp_message = None
+        
+        # Stop timers and game updates
+        self.game_start_ticks = 0
+        self.last_fire_spread_time = 0
 
     def _get_difficulty_settings(self):
         """Return the selected difficulty settings with a safe fallback."""
@@ -437,6 +464,7 @@ class FireEscapeGame:
         if self.game_over:
             return
         self.game_over = True
+        self.screen_state = "game_over"
         self.lose_reason = reason
         self.status_message = reason
         # Stop challenge timer and AI movement
@@ -458,6 +486,7 @@ class FireEscapeGame:
         if current_position in self.exits:
             if not self.game_won:
                 self.game_won = True
+                self.screen_state = "win"
                 self.status_message = "You Escaped Successfully!"
                 self.ai_mode = False
                 self.current_path = []
@@ -535,6 +564,10 @@ class FireEscapeGame:
         # Generate fresh board, reset all runtime state
         self._setup_game()
         
+        # Ensure we're back in playing state
+        self.show_menu = False
+        self.screen_state = "playing"
+        
         # Restore the mode selection and reactivate it
         self.selected_mode = current_mode_selection
         
@@ -590,6 +623,10 @@ class FireEscapeGame:
             # Gameplay key handling
             if event.key == pygame.K_ESCAPE:
                 self.running = False
+            elif event.key == pygame.K_q:
+                # Q returns to main menu from any gameplay screen
+                self.go_to_menu()
+                continue
             elif event.key == pygame.K_h:
                 self.show_path = not self.show_path
             elif event.key == pygame.K_c:
@@ -616,10 +653,12 @@ class FireEscapeGame:
                         self._set_mode_ai_auto()
                     else:
                         self._set_mode_manual()
-            # When on final screens only allow R (restart) and ESC (quit)
+            # When on final screens only allow R (restart), Q (menu), and ESC (quit)
             elif self.game_over or self.game_won:
                 if event.key == pygame.K_r:
                     self.reset_game()
+                elif event.key == pygame.K_q:
+                    self.go_to_menu()
                 elif event.key == pygame.K_ESCAPE:
                     self.running = False
                 # ignore all other keys while showing final screen
@@ -918,7 +957,8 @@ class FireEscapeGame:
 
     def _update_active_mode(self):
         """Run per-frame logic for the active mode."""
-        if self.show_menu:
+        # Skip updates if not actively playing
+        if self.show_menu or self.screen_state != "playing":
             return
 
         self._update_challenge_runtime()
@@ -1071,7 +1111,7 @@ class FireEscapeGame:
         
         # Controls legend
         controls_text = self._render_ui_text(
-            "W/A/S/D: Move | H: Path | SPACE: AI | R: Restart | ESC: Quit",
+            "W/A/S/D: Move | H: Path | SPACE: AI | Q: Menu | R: Restart | ESC: Quit",
             size=12,
             color=(90, 96, 105),
         )
@@ -1185,7 +1225,7 @@ class FireEscapeGame:
             self.screen.blit(stat_text, stat_rect)
             y_pos += 40
 
-        control_text = controls_font.render("Press R to restart  |  Press ESC to quit", True, (220, 255, 220))
+        control_text = controls_font.render("Press R to restart  |  Press Q for menu  |  Press ESC to quit", True, (220, 255, 220))
         control_rect = control_text.get_rect(center=(center_x, y_pos + 20))
         self.screen.blit(control_text, control_rect)
 
@@ -1250,7 +1290,7 @@ class FireEscapeGame:
             self.screen.blit(stat_text, stat_rect)
             y_pos += 36
 
-        control_text = controls_font.render("Press R to restart  |  Press ESC to quit", True, (255, 200, 200))
+        control_text = controls_font.render("Press R to restart  |  Press Q for menu  |  Press ESC to quit", True, (255, 200, 200))
         control_rect = control_text.get_rect(center=(center_x, y_pos + 10))
         self.screen.blit(control_text, control_rect)
 
