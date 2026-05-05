@@ -19,7 +19,44 @@ To adjust game balance, edit DIFFICULTY_SETTINGS dictionary.
 To change colors, edit the color constants (COLOR_* variables).
 """
 
-# Grid and screen layout
+# ===== MENU LAYOUT (Fixed) =====
+# Menu uses a fixed comfortable size for visual consistency
+MENU_WIDTH = 1100
+MENU_HEIGHT = 750
+
+# ===== GAMEPLAY LAYOUT =====
+# Top bar for title/status, bottom bar for controls
+TOP_BAR_HEIGHT = 60
+BOTTOM_BAR_HEIGHT = 132
+UI_PANEL_WIDTH = 340  # Right side information panel
+
+# ===== DIFFICULTY-SPECIFIC GAMEPLAY LAYOUTS =====
+# Each difficulty has a different grid size and cell size for balanced challenge
+# Layout calculation: SCREEN_WIDTH = GRID_OFFSET_X + COLS*CELL_SIZE + UI_PANEL_WIDTH + 50
+#                    SCREEN_HEIGHT = TOP_BAR_HEIGHT + ROWS*CELL_SIZE + BOTTOM_BAR_HEIGHT + 50
+
+GAMEPLAY_LAYOUTS = {
+    "EASY": {
+        "cell_size": 50,
+        "grid_rows": 10,
+        "grid_cols": 10,
+        "ui_panel_width": 320,
+    },
+    "MEDIUM": {
+        "cell_size": 40,
+        "grid_rows": 15,
+        "grid_cols": 15,
+        "ui_panel_width": 340,
+    },
+    "HARD": {
+        "cell_size": 32,
+        "grid_rows": 20,
+        "grid_cols": 20,
+        "ui_panel_width": 360,
+    },
+}
+
+# Default/legacy grid and screen layout (for backward compatibility)
 GRID_ROWS = 15
 GRID_COLS = 15
 CELL_SIZE = 40

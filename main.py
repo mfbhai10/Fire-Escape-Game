@@ -44,6 +44,12 @@ from config import (
     DEFAULT_DIFFICULTY,
     DIFFICULTY_SETTINGS,
     CHALLENGE_END_GAME_ON_NO_PATH,
+    MENU_WIDTH,
+    MENU_HEIGHT,
+    TOP_BAR_HEIGHT,
+    BOTTOM_BAR_HEIGHT,
+    UI_PANEL_WIDTH,
+    GAMEPLAY_LAYOUTS,
 )
 from game_board import GameBoard
 from player import Player
@@ -107,8 +113,9 @@ class FireEscapeGame:
     def __init__(self):
         """Set up Pygame and create the initial game state."""
         pygame.init()
-        self.selected_difficulty = DEFAULT_DIFFICULTY
-        self.screen = pygame.display.set_mode(self._get_window_size(self.selected_difficulty))
+        
+        # Start with menu layout (fixed size)
+        self.screen = pygame.display.set_mode((MENU_WIDTH, MENU_HEIGHT))
         pygame.display.set_caption("AI-Based Fire Escape Game Using A* Search")
 
         self.clock = pygame.time.Clock()
@@ -122,6 +129,7 @@ class FireEscapeGame:
         self.show_menu = True
         self.screen_state = "menu"  # "menu", "playing", "win", or "game_over"
         self.selected_mode = 1  # 1=Manual, 2=AI Auto, 3=Challenge
+        self.selected_difficulty = DEFAULT_DIFFICULTY  # Selected difficulty for menu
         self.active_mode = MODE_MANUAL
         # External checks may expect a `game_mode` attribute name; keep alias in sync.
         self.game_mode = self.active_mode
@@ -129,10 +137,63 @@ class FireEscapeGame:
         self.running = True
         self.ai_move_delay = AI_MOVE_DELAY_MS
 
+        # Store current layout dimensions for gameplay
+        self.current_cell_size = CELL_SIZE
+        self.current_grid_rows = 15
+        self.current_grid_cols = 15
+        self.current_ui_panel_width = UI_PANEL_WIDTH
+
+        # Menu animation particles (for background visual effects)
+        self.menu_particles = []
+        self._init_menu_particles()
+
         # Runtime values are reset together so restart stays reliable.
         self._reset_runtime_state()
 
         self._setup_game()
+
+    def _apply_menu_layout(self):
+        """Apply menu layout: fixed large size for comfortable menu display."""
+        # Menu has a fixed comfortable size
+        self.screen = pygame.display.set_mode((MENU_WIDTH, MENU_HEIGHT))
+        # Reinitialize particles for the new screen size
+        self._init_menu_particles()
+
+    def _apply_game_layout_for_difficulty(self):
+        """Apply gameplay layout based on the selected difficulty.
+        
+        This resizes the screen to accommodate the game grid, UI panel, and control bars.
+        Different difficulties have different grid sizes and cell sizes for balanced challenge.
+        """
+        # Get layout for selected difficulty
+        layout_key = self.selected_difficulty
+        if layout_key not in GAMEPLAY_LAYOUTS:
+            layout_key = DIFFICULTY_MEDIUM  # Fallback to medium
+        
+        layout = GAMEPLAY_LAYOUTS[layout_key]
+        cell_size = layout["cell_size"]
+        grid_rows = layout["grid_rows"]
+        grid_cols = layout["grid_cols"]
+        ui_panel_width = layout["ui_panel_width"]
+        
+        # Store current layout values for later use
+        self.current_cell_size = cell_size
+        self.current_grid_rows = grid_rows
+        self.current_grid_cols = grid_cols
+        self.current_ui_panel_width = ui_panel_width
+        
+        # Calculate screen dimensions
+        # Layout: [grid on left] [ui panel on right]
+        grid_width = grid_cols * cell_size
+        grid_height = grid_rows * cell_size
+        
+        # Total width: grid + UI panel + padding
+        screen_width = grid_width + ui_panel_width + 50
+        # Total height: top bar + grid + bottom bar + padding
+        screen_height = TOP_BAR_HEIGHT + grid_height + BOTTOM_BAR_HEIGHT + 50
+        
+        # Resize the pygame display for gameplay
+        self.screen = pygame.display.set_mode((screen_width, screen_height))
 
     def _get_selected_mode_name(self):
         """Return the label for the currently selected menu mode."""
@@ -143,7 +204,15 @@ class FireEscapeGame:
         return "Manual Mode"
 
     def _start_selected_game(self):
-        """Start a fresh game using the menu selections."""
+        """Start a fresh game using the menu selections.
+        
+        This method applies the difficulty-based layout, sets up the game board,
+        and switches from menu to gameplay screen state.
+        """
+        # Apply game layout based on selected difficulty
+        self._apply_game_layout_for_difficulty()
+        
+        # Set up fresh game board
         self._setup_game()
         self.show_menu = False
         self.screen_state = "playing"
@@ -152,10 +221,13 @@ class FireEscapeGame:
     def go_to_menu(self):
         """Return to the main menu from any game screen.
         
-        This method stops gameplay, clears temporary state, and returns to the
-        main menu without closing the window or restarting the game. Difficulty
+        This method applies menu layout, stops gameplay, clears temporary state,
+        and returns to the main menu without closing the window. Difficulty
         and mode selections are preserved.
         """
+        # Apply menu layout (fixed size)
+        self._apply_menu_layout()
+        
         # Stop gameplay immediately
         self.show_menu = True
         self.screen_state = "menu"
@@ -276,17 +348,6 @@ class FireEscapeGame:
         if self.remaining_time_sec <= 0:
             # Use centralized game-over handling so all teardown is consistent
             self.set_game_over("Time Up! Game Over")
-
-    def _get_window_size(self, difficulty):
-        """Calculate the display size for the selected difficulty."""
-        settings = DIFFICULTY_SETTINGS.get(difficulty, DIFFICULTY_SETTINGS[DEFAULT_DIFFICULTY])
-        board_width = settings["cols"] * CELL_SIZE
-        board_height = settings["rows"] * CELL_SIZE
-        return (board_width, board_height + FOOTER_HEIGHT)
-
-    def _resize_window_for_board(self):
-        """Resize the window to match the current board dimensions."""
-        self.screen = pygame.display.set_mode(self._get_window_size(self.selected_difficulty))
 
     def _reset_runtime_state(self):
         """Reset all gameplay variables that should return to defaults on restart."""
@@ -527,7 +588,6 @@ class FireEscapeGame:
     def _setup_game(self):
         """Create a fresh board, player, and initial AI path."""
         self.board = GameBoard(self.selected_difficulty)
-        self._resize_window_for_board()
         self.player_start = self.board.find_player()
         self.player = Player(self.board.player_start, self.board)
         self.exits = self.board.find_exits()
@@ -1019,17 +1079,20 @@ class FireEscapeGame:
             return pygame.font.Font(None, 24).render(text, True, color)
 
     def draw_footer(self):
-        """Draw an improved, organized UI panel at the bottom of the screen. [VERSION 2]"""
-        footer_top = self.board.rows * CELL_SIZE
-        footer_width = self.board.cols * CELL_SIZE
+        """Draw an improved, organized UI panel at the bottom of the screen with proper layout."""
+        # Calculate positions using the current layout dimensions
+        grid_height = self.current_grid_rows * self.current_cell_size
+        footer_top = TOP_BAR_HEIGHT + grid_height
+        grid_width = self.current_grid_cols * self.current_cell_size
+        footer_width = grid_width
 
         # Background panel
-        panel_rect = pygame.Rect(0, footer_top, footer_width, FOOTER_HEIGHT)
+        panel_rect = pygame.Rect(0, footer_top, self.screen.get_width(), BOTTOM_BAR_HEIGHT)
         pygame.draw.rect(self.screen, (242, 244, 248), panel_rect)
         pygame.draw.rect(self.screen, (180, 188, 200), panel_rect, 2)
 
         # Top accent line
-        accent_rect = pygame.Rect(0, footer_top, footer_width, 4)
+        accent_rect = pygame.Rect(0, footer_top, self.screen.get_width(), 4)
         pygame.draw.rect(self.screen, (74, 144, 226), accent_rect)
 
         # Gather game state information
@@ -1117,56 +1180,226 @@ class FireEscapeGame:
         )
         self.screen.blit(controls_text, (10, y_pos + 22))
 
+    def _init_menu_particles(self):
+        """Initialize animated particles for the menu background."""
+        import random
+        self.menu_particles = []
+        for _ in range(15):
+            x = random.randint(0, self.screen.get_width())
+            y = random.randint(0, self.screen.get_height())
+            speed_y = random.uniform(0.5, 1.5)
+            size = random.randint(2, 6)
+            self.menu_particles.append({"x": x, "y": y, "speed_y": speed_y, "size": size})
+
+    def _update_menu_particles(self):
+        """Update menu particles position for animation."""
+        for particle in self.menu_particles:
+            particle["y"] += particle["speed_y"]
+            # Wrap particles around to create continuous motion
+            if particle["y"] > self.screen.get_height():
+                particle["y"] = -10
+
+    def _draw_menu_particles(self):
+        """Draw animated fire particles in the menu background."""
+        for particle in self.menu_particles:
+            # Particles get brighter as they move up (fire effect)
+            brightness = int(200 * (1.0 - particle["y"] / self.screen.get_height()))
+            brightness = max(50, min(200, brightness))
+            color = (brightness, int(brightness * 0.6), 0)  # Orange/red glow
+            pygame.draw.circle(self.screen, color, (int(particle["x"]), int(particle["y"])), particle["size"])
+
+    def _draw_glowing_text(self, text, font, x, y, color, glow_color, glow_offset=3):
+        """Draw text with a glow effect (shadow text slightly offset)."""
+        # Draw glow layer (offset text in darker color)
+        glow_text = font.render(text, True, glow_color)
+        self.screen.blit(glow_text, (x - glow_offset, y - glow_offset))
+        self.screen.blit(glow_text, (x + glow_offset, y - glow_offset))
+        self.screen.blit(glow_text, (x - glow_offset, y + glow_offset))
+        self.screen.blit(glow_text, (x + glow_offset, y + glow_offset))
+        # Draw main text on top
+        main_text = font.render(text, True, color)
+        self.screen.blit(main_text, (x, y))
+
+    def _draw_menu_card(self, x, y, width, height, mode_num, is_selected):
+        """Draw a mode selection card with description."""
+        # Card background
+        card_color = (60, 100, 150) if is_selected else (40, 50, 70)
+        border_color = (255, 140, 0) if is_selected else (100, 100, 120)
+        border_width = 3 if is_selected else 2
+        pygame.draw.rect(self.screen, card_color, (x, y, width, height))
+        pygame.draw.rect(self.screen, border_color, (x, y, width, height), border_width)
+
+        # Mode text and description
+        modes = {
+            1: ("1. Manual Mode", "Control the player and\nfollow AI hints."),
+            2: ("2. AI Auto Mode", "Let A* guide the player\nautomatically."),
+            3: ("3. Challenge Mode", "Escape while fire spreads\nin real time."),
+        }
+        mode_name, description = modes.get(mode_num, ("", ""))
+
+        mode_font = pygame.font.Font(None, 28)
+        desc_font = pygame.font.Font(None, 20)
+
+        mode_text = mode_font.render(mode_name, True, (255, 255, 255))
+        self.screen.blit(mode_text, (x + 15, y + 10))
+
+        # Draw description line by line
+        for i, line in enumerate(description.split("\n")):
+            desc_text = desc_font.render(line, True, (200, 200, 200))
+            self.screen.blit(desc_text, (x + 15, y + 45 + i * 25))
+
+    def _draw_difficulty_badges(self, x, y):
+        """Draw difficulty selection badges."""
+        difficulties = [
+            ("E", "Easy", "Small map,\nslow fire."),
+            ("M", "Medium", "Balanced\ndanger."),
+            ("H", "Hard", "Large map,\nfast fire."),
+        ]
+        badge_spacing = 140
+        badge_width = 120
+        badge_height = 90
+
+        for i, (key, name, desc) in enumerate(difficulties):
+            badge_x = x + i * badge_spacing
+            is_selected = self.selected_difficulty == name.upper()
+
+            # Badge background
+            badge_color = (255, 140, 0) if is_selected else (60, 60, 80)
+            border_color = (255, 200, 100) if is_selected else (100, 100, 120)
+            border_width = 3 if is_selected else 2
+            pygame.draw.rect(self.screen, badge_color, (badge_x, y, badge_width, badge_height))
+            pygame.draw.rect(self.screen, border_color, (badge_x, y, badge_width, badge_height), border_width)
+
+            # Badge text
+            key_font = pygame.font.Font(None, 36)
+            name_font = pygame.font.Font(None, 18)
+            desc_font = pygame.font.Font(None, 14)
+
+            key_text = key_font.render(key, True, (255, 255, 255))
+            name_text = name_font.render(name, True, (255, 255, 255))
+
+            key_rect = key_text.get_rect(center=(badge_x + badge_width // 2, y + 15))
+            name_rect = name_text.get_rect(center=(badge_x + badge_width // 2, y + 45))
+
+            self.screen.blit(key_text, key_rect)
+            self.screen.blit(name_text, name_rect)
+
+            # Description
+            for j, line in enumerate(desc.split("\n")):
+                desc_text = desc_font.render(line, True, (180, 180, 180))
+                desc_rect = desc_text.get_rect(center=(badge_x + badge_width // 2, y + 62 + j * 12))
+                self.screen.blit(desc_text, desc_rect)
+
+    def _draw_menu_background(self):
+        """Draw the gradient menu background."""
+        # Dark navy/black background with subtle gradient effect
+        top_color = (15, 20, 40)  # Very dark navy
+        bottom_color = (25, 35, 60)  # Slightly lighter navy
+        
+        for row in range(self.screen.get_height()):
+            # Interpolate between top and bottom color
+            ratio = row / self.screen.get_height()
+            color = (
+                int(top_color[0] + (bottom_color[0] - top_color[0]) * ratio),
+                int(top_color[1] + (bottom_color[1] - top_color[1]) * ratio),
+                int(top_color[2] + (bottom_color[2] - top_color[2]) * ratio),
+            )
+            pygame.draw.line(self.screen, color, (0, row), (self.screen.get_width(), row))
+
     def draw_menu(self):
-        """Draw simple keyboard-based menu at startup."""
-        self.screen.fill((30, 30, 35))
-        title = self.menu_title_font.render("Fire Escape AI Game", True, (240, 240, 245))
-        subtitle = self.menu_body_font.render("Simple Menu", True, (180, 180, 180))
+        """Draw an enhanced, modern game menu with visual effects."""
+        # Draw background with gradient
+        self._draw_menu_background()
+        
+        # Update and draw animated particles
+        self._update_menu_particles()
+        self._draw_menu_particles()
 
-        mode_label = self.menu_body_font.render(
-            f"Selected mode: {self._get_selected_mode_name()}",
-            True,
-            (140, 220, 140),
-        )
-        difficulty_label = self.menu_body_font.render(
-            f"Selected difficulty: {self.selected_difficulty}",
-            True,
-            (140, 220, 140),
-        )
-        mode_help = self.menu_body_font.render(
-            "1 = Manual Mode   2 = AI Auto Mode   3 = Challenge Mode",
-            True,
-            (200, 200, 200),
-        )
-        difficulty_help = self.menu_body_font.render(
-            "E = Easy   M = Medium   H = Hard",
-            True,
-            (200, 200, 200),
-        )
-        start_help = self.menu_body_font.render("Press ENTER or R to start", True, (240, 240, 245))
-        quit_help = self.menu_body_font.render("Press ESC to quit", True, (180, 180, 180))
+        screen_width = self.screen.get_width()
+        screen_height = self.screen.get_height()
 
-        self.screen.blit(title, (20, 20))
-        self.screen.blit(subtitle, (20, 65))
-        self.screen.blit(mode_label, (20, 120))
-        self.screen.blit(difficulty_label, (20, 155))
-        self.screen.blit(mode_help, (20, 210))
-        self.screen.blit(difficulty_help, (20, 245))
-        self.screen.blit(start_help, (20, 300))
-        self.screen.blit(quit_help, (20, 335))
+        # ===== TITLE SECTION =====
+        title_font = pygame.font.Font(None, 80)
+        subtitle_font = pygame.font.Font(None, 30)
+
+        title_y = 40
+
+        # Center the title horizontally
+        title_text_str = "FIRE ESCAPE AI"
+        title_w, title_h = title_font.size(title_text_str)
+        title_x = screen_width // 2 - (title_w // 2)
+
+        # Draw glowing title with glow effect (centered)
+        self._draw_glowing_text(
+            title_text_str,
+            title_font,
+            title_x,
+            title_y,
+            (255, 200, 50),  # Gold/orange
+            (150, 80, 0),  # Dark orange glow
+            glow_offset=4,
+        )
+
+        # Draw subtitle
+        subtitle_text = subtitle_font.render(
+            "A* Search Emergency Evacuation Game",
+            True,
+            (180, 180, 200),
+        )
+        subtitle_rect = subtitle_text.get_rect(center=(screen_width // 2, title_y + 80))
+        self.screen.blit(subtitle_text, subtitle_rect)
+
+        # ===== MODE SELECTION SECTION =====
+        card_width = 260
+        card_height = 130
+        card_y = 160
+        card_spacing = 290
+
+        for mode_num in [1, 2, 3]:
+            is_selected = self.selected_mode == mode_num
+            card_x = 50 + (mode_num - 1) * card_spacing
+            self._draw_menu_card(card_x, card_y, card_width, card_height, mode_num, is_selected)
+
+        # ===== DIFFICULTY SELECTION SECTION =====
+        difficulty_y = card_y + card_height + 50
+        self._draw_difficulty_badges(60, difficulty_y)
+
+        # ===== CONTROLS SECTION =====
+        controls_font = pygame.font.Font(None, 22)
+        controls_y = screen_height - 100
+
+        controls_text = controls_font.render("ENTER = Start Game    1/2/3 = Select Mode    E/M/H = Select Difficulty    ESC = Quit", True, (150, 200, 255))
+        controls_rect = controls_text.get_rect(center=(screen_width // 2, controls_y))
+        self.screen.blit(controls_text, controls_rect)
+
+        # Blinking "Press ENTER to Start" indicator
+        current_time = pygame.time.get_ticks()
+        blink_speed = 500  # Milliseconds between blinks
+        is_visible = (current_time % (blink_speed * 2)) < blink_speed
+
+        if is_visible:
+            start_text_font = pygame.font.Font(None, 40)
+            start_text = start_text_font.render("► Press ENTER to Start ◄", True, (100, 255, 100))
+            start_rect = start_text.get_rect(center=(screen_width // 2, screen_height - 40))
+            self.screen.blit(start_text, start_rect)
+
         pygame.display.flip()
+
 
     def draw_win_screen(self):
         """Draw the win/escaped screen with game statistics."""
+        # Calculate grid dimensions
+        grid_width = self.current_grid_cols * self.current_cell_size
+        grid_height = self.current_grid_rows * self.current_cell_size
+        
         # Semi-transparent overlay
-        overlay = pygame.Surface((self.board.cols * CELL_SIZE, self.board.rows * CELL_SIZE))
+        overlay = pygame.Surface((grid_width, grid_height))
         overlay.set_alpha(200)
         overlay.fill((30, 100, 30))  # Green tint
-        self.screen.blit(overlay, (0, 0))
+        self.screen.blit(overlay, (0, TOP_BAR_HEIGHT))
 
         # Calculate center position
-        screen_width = self.board.cols * CELL_SIZE
-        center_x = screen_width // 2
+        center_x = grid_width // 2
 
         title_font = pygame.font.Font(None, 64)
         info_font = pygame.font.Font(None, 26)
@@ -1175,7 +1408,7 @@ class FireEscapeGame:
         # Render mode-specific win screens
         if self.active_mode == MODE_AI_AUTO:
             title_text = title_font.render("AI ESCAPED SUCCESSFULLY!", True, (180, 255, 180))
-            title_rect = title_text.get_rect(center=(center_x, 60))
+            title_rect = title_text.get_rect(center=(center_x, 60 + TOP_BAR_HEIGHT))
             self.screen.blit(title_text, title_rect)
 
             stats = [
@@ -1189,7 +1422,7 @@ class FireEscapeGame:
             ]
         elif self.active_mode == MODE_CHALLENGE:
             title_text = title_font.render("YOU ESCAPED!", True, (180, 255, 180))
-            title_rect = title_text.get_rect(center=(center_x, 60))
+            title_rect = title_text.get_rect(center=(center_x, 60 + TOP_BAR_HEIGHT))
             self.screen.blit(title_text, title_rect)
 
             stats = [
@@ -1206,7 +1439,7 @@ class FireEscapeGame:
         else:
             # Manual Mode
             title_text = title_font.render("YOU ESCAPED!", True, (180, 255, 180))
-            title_rect = title_text.get_rect(center=(center_x, 60))
+            title_rect = title_text.get_rect(center=(center_x, 60 + TOP_BAR_HEIGHT))
             self.screen.blit(title_text, title_rect)
 
             stats = [
@@ -1218,7 +1451,7 @@ class FireEscapeGame:
                 "You reached the exit manually.",
             ]
 
-        y_pos = 150
+        y_pos = 150 + TOP_BAR_HEIGHT
         for stat in stats:
             stat_text = info_font.render(stat, True, (245, 245, 245))
             stat_rect = stat_text.get_rect(center=(center_x, y_pos))
@@ -1231,14 +1464,17 @@ class FireEscapeGame:
 
     def draw_game_over_screen(self):
         """Draw the game over screen with loss information."""
+        # Calculate grid dimensions
+        grid_width = self.current_grid_cols * self.current_cell_size
+        grid_height = self.current_grid_rows * self.current_cell_size
+        
         # Semi-transparent overlay
-        overlay = pygame.Surface((self.board.cols * CELL_SIZE, self.board.rows * CELL_SIZE))
+        overlay = pygame.Surface((grid_width, grid_height))
         overlay.set_alpha(200)
         overlay.fill((100, 30, 30))  # Red tint
-        self.screen.blit(overlay, (0, 0))
+        self.screen.blit(overlay, (0, TOP_BAR_HEIGHT))
 
-        screen_width = self.board.cols * CELL_SIZE
-        center_x = screen_width // 2
+        center_x = grid_width // 2
 
         title_font = pygame.font.Font(None, 64)
         info_font = pygame.font.Font(None, 26)
@@ -1247,11 +1483,11 @@ class FireEscapeGame:
         reason = self.lose_reason or self.status_message or "Game Over"
 
         title_text = title_font.render("GAME OVER", True, (255, 150, 150))
-        title_rect = title_text.get_rect(center=(center_x, 60))
+        title_rect = title_text.get_rect(center=(center_x, 60 + TOP_BAR_HEIGHT))
         self.screen.blit(title_text, title_rect)
 
         reason_text = info_font.render(reason, True, (255, 210, 210))
-        reason_rect = reason_text.get_rect(center=(center_x, 120))
+        reason_rect = reason_text.get_rect(center=(center_x, 120 + TOP_BAR_HEIGHT))
         self.screen.blit(reason_text, reason_rect)
 
         # Mode-specific statistics
@@ -1283,7 +1519,7 @@ class FireEscapeGame:
                 f"Smoke Crossed: {self.smoke_crossed_count}",
             ]
 
-        y_pos = 170
+        y_pos = 170 + TOP_BAR_HEIGHT
         for stat in stats:
             stat_text = info_font.render(stat, True, (255, 245, 245))
             stat_rect = stat_text.get_rect(center=(center_x, y_pos))
@@ -1299,6 +1535,9 @@ class FireEscapeGame:
         if self.show_menu:
             self.draw_menu()
             return
+
+        # Clear screen with background color
+        self.screen.fill((245, 247, 250))
 
         # Draw the game board first
         # In AI mode, show the remaining path; otherwise show the full AI path
@@ -1317,7 +1556,7 @@ class FireEscapeGame:
                 next_cell = None
             visited = self.ai_visited if self.show_path else None
 
-        self.board.draw(self.screen, path_to_draw, next_cell=next_cell, visited=visited)
+        self.board.draw(self.screen, path_to_draw, next_cell=next_cell, visited=visited, cell_size=self.current_cell_size)
         self.draw_footer()
 
         # Draw end screens on top of the board

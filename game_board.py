@@ -367,7 +367,7 @@ class GameBoard:
         changed_cells = sorted(new_smoke_cells | new_fire_cells)
         return changed_cells
 
-    def draw(self, screen, path=None, next_cell=None, visited=None, player_pos=None, highlight_player=False):
+    def draw(self, screen, path=None, next_cell=None, visited=None, player_pos=None, highlight_player=False, cell_size=None):
         """Draw the board with animated cells and optional AI path using Pygame. [VERSION 2]
 
         Renders cells with smooth fire animation and visual overlays for the AI path.
@@ -378,7 +378,11 @@ class GameBoard:
         - path: iterable of (row, col) cells representing the A* path
         - next_cell: (row, col) tuple indicating the next AI move
         - visited: iterable of (row, col) already visited by the AI
+        - cell_size: size of each cell in pixels (defaults to CELL_SIZE from config)
         """
+        if cell_size is None:
+            cell_size = CELL_SIZE
+            
         path_cells = set(path or [])
         visited_cells = set(visited or [])
         next_cell = next_cell if next_cell is not None else None
@@ -387,17 +391,17 @@ class GameBoard:
         current_ticks = pygame.time.get_ticks()
 
         # Draw a clean board background first.
-        board_rect = pygame.Rect(0, 0, self.cols * CELL_SIZE, self.rows * CELL_SIZE)
+        board_rect = pygame.Rect(0, 0, self.cols * cell_size, self.rows * cell_size)
         pygame.draw.rect(screen, (235, 239, 244), board_rect)
 
         for row_index in range(self.rows):
             for col_index in range(self.cols):
                 cell = self.grid[row_index][col_index]
                 rect = pygame.Rect(
-                    col_index * CELL_SIZE,
-                    row_index * CELL_SIZE,
-                    CELL_SIZE,
-                    CELL_SIZE,
+                    col_index * cell_size,
+                    row_index * cell_size,
+                    cell_size,
+                    cell_size,
                 )
 
                 # Get base color for this cell (with animation support for fire)
@@ -433,17 +437,20 @@ class GameBoard:
                     if icon:
                         self._draw_icon(screen, icon, inner_rect, self._get_icon_color(cell))
 
-        self._draw_grid_lines(screen)
+        self._draw_grid_lines(screen, cell_size)
 
-    def _draw_grid_lines(self, screen):
+    def _draw_grid_lines(self, screen, cell_size=None):
         """Draw simple grid lines over the whole board."""
+        if cell_size is None:
+            cell_size = CELL_SIZE
+            
         for row_index in range(self.rows + 1):
-            y = row_index * CELL_SIZE
-            pygame.draw.line(screen, GRID_LINE_COLOR, (0, y), (self.cols * CELL_SIZE, y))
+            y = row_index * cell_size
+            pygame.draw.line(screen, GRID_LINE_COLOR, (0, y), (self.cols * cell_size, y))
 
         for col_index in range(self.cols + 1):
-            x = col_index * CELL_SIZE
-            pygame.draw.line(screen, GRID_LINE_COLOR, (x, 0), (x, self.rows * CELL_SIZE))
+            x = col_index * cell_size
+            pygame.draw.line(screen, GRID_LINE_COLOR, (x, 0), (x, self.rows * cell_size))
 
     def _get_cell_color(self, cell, current_ticks=None):
         """Map a cell symbol to its display color. [VERSION 2 ANIMATION]

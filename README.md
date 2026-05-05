@@ -122,6 +122,63 @@ A player is trapped inside a burning building. The building contains walls, fire
   - All exits become unreachable
 - Difficulty affects: grid size, time limit, fire spread probability, number of obstacles, and score multiplier.
 
+## Screen Layout & Adaptive Sizing
+
+The game now features a comprehensive layout system that adapts to the selected difficulty:
+
+### Main Menu Screen
+
+- **Fixed size**: 1100 × 750 pixels for comfortable menu interaction
+- **Centered title**: "FIRE ESCAPE AI" with glowing effect
+- **Subtitle**: A\* Search Emergency Evacuation Game
+- **Mode cards**: Three selectable cards (Manual, AI Auto, Challenge)
+- **Difficulty badges**: Easy, Medium, Hard with visual highlighting
+- **Controls**: ENTER to start, number keys to select, ESC to quit
+- **Blinking indicator**: Visual feedback showing start button is ready
+
+### Gameplay Screen (Adaptive Based on Difficulty)
+
+The gameplay screen layout adapts based on the selected difficulty level:
+
+#### Easy Mode
+
+- **Grid size**: 10 × 10 cells
+- **Cell size**: 50 pixels
+- **Screen width**: ~870 pixels
+- **Screen height**: ~742 pixels
+
+#### Medium Mode
+
+- **Grid size**: 15 × 15 cells
+- **Cell size**: 40 pixels
+- **Screen width**: ~990 pixels
+- **Screen height**: ~842 pixels
+
+#### Hard Mode
+
+- **Grid size**: 20 × 20 cells
+- **Cell size**: 32 pixels
+- **Screen width**: ~1050 pixels
+- **Screen height**: ~882 pixels
+
+### Gameplay Layout Components
+
+The gameplay screen is organized as follows:
+
+- **Grid (left side)**: The main game board with cells
+- **UI Panel (bottom bar)**: Comprehensive information display including:
+  - Game title and mode/difficulty
+  - Real-time stats (moves, time, score, smoke crossed)
+  - Path information (cost, steps remaining, selected exit)
+  - Status message and control hints
+
+### Win / Game Over Screens
+
+- Uses the current game screen size for consistency
+- **Semi-transparent overlay**: Color-coded (green for win, red for game over)
+- **Centered text**: Mode-specific statistics and outcome
+- **Control hints**: R/Q/ESC key reminders
+
 ## How to Run
 
 ### Requirements
