@@ -227,6 +227,7 @@ class FireEscapeGame:
         self.remaining_time_sec = self.time_limit_sec
         self.challenge_time_limit_sec = self.time_limit_sec
         self.challenge_remaining_sec = self.remaining_time_sec
+        self.lose_reason = None
 
     def _update_challenge_timer(self):
         """Update the countdown only while Challenge Mode is active. [VERSION 3]
@@ -244,9 +245,8 @@ class FireEscapeGame:
         self._update_live_score()
 
         if self.remaining_time_sec <= 0:
-            self.game_over = True
-            self.status_message = "Time Up! Game Over"
-            self._finalize_score(False)
+            # Use centralized game-over handling so all teardown is consistent
+            self.set_game_over("Time Up! Game Over")
 
     def _get_window_size(self, difficulty):
         """Calculate the display size for the selected difficulty."""
@@ -297,6 +297,8 @@ class FireEscapeGame:
         # Temporary on-screen messages
         self.temp_message = None
         self.temp_message_until = 0
+        # Loss reason tracking (cleared on reset)
+        self.lose_reason = None
 
     def _set_mode_manual(self):
         """Activate Manual Mode state."""
@@ -413,16 +415,80 @@ class FireEscapeGame:
         if not path_found:
             # No path exists - apply the configured behavior
             if CHALLENGE_END_GAME_ON_NO_PATH:
-                # End the game immediately
-                self.game_over = True
-                self.status_message = "No safe path available! Game Over."
-                self._finalize_score(False)
+                # End the game immediately using centralized handler
+                self.set_game_over("No safe path available! Game Over.")
             else:
                 # Allow player to continue manually
                 self.ai_path = []
                 self.ai_path_cost = 0
                 self.ai_selected_exit = None
                 self.status_message = "No safe path available. Try manual movement."
+
+    def set_game_over(self, reason="Game Over"):
+        """Set the game over state consistently across modes.
+
+        Stops timers, AI movement, finalizes score, and stores the reason.
+        """
+        if self.game_over:
+            return
+        self.game_over = True
+        self.lose_reason = reason
+        self.status_message = reason
+        # Stop challenge timer and AI movement
+        self.challenge_active = False
+        self.ai_mode = False
+        self.current_path = []
+        # Finalize scoring for challenge mode
+        try:
+            self._finalize_score(False)
+        except Exception:
+            pass
+
+    def clear_lose_reason(self):
+        self.lose_reason = None
+
+    def check_win_condition(self):
+        """Check if the player reached an exit and mark win state."""
+        current_position = (self.player.row, self.player.col)
+        if current_position in self.exits:
+            if not self.game_won:
+                self.game_won = True
+                self.status_message = "You Escaped Successfully!"
+                self.ai_mode = False
+                self.current_path = []
+                self._finalize_score(True)
+            return True
+        return False
+
+    def check_lose_conditions(self):
+        """Evaluate lose conditions and apply game-over when appropriate.
+
+        Returns True if game over was triggered.
+        """
+        # 2. Fire reaches the player (fire spread onto player)
+        if self.board.get_cell(self.player.row, self.player.col) == FIRE:
+            self.set_game_over("Game Over! Fire reached you.")
+            return True
+
+        # 4/5. No safe path to any exit or all exits blocked/unreachable
+        path_exists = self._refresh_ai_path_from_player()
+        if not path_exists:
+            if self.active_mode == MODE_CHALLENGE:
+                if CHALLENGE_END_GAME_ON_NO_PATH:
+                    self.set_game_over("No safe path found!")
+                    return True
+                else:
+                    self.status_message = "No safe path available. Try manual movement."
+            elif self.active_mode == MODE_AI_AUTO:
+                # Stop AI and notify, but do not end the game unless in fire
+                self.ai_mode = False
+                self.current_path = []
+                self.status_message = "AI trapped: no safe path available"
+            else:
+                # Manual mode: warn but do not end game
+                self.status_message = "No safe path available. Try manual movement."
+
+        return False
 
     def _setup_game(self):
         """Create a fresh board, player, and initial AI path."""
@@ -439,8 +505,7 @@ class FireEscapeGame:
         path_found = self._refresh_ai_path_from_player()
 
         if not path_found and (self.player.row, self.player.col) not in self.exits:
-            self.game_over = True
-            self.status_message = "No safe path found!"
+            self.set_game_over("No safe path found!")
 
     def reset_game(self):
         """Reset the current game while preserving difficulty and mode selection.
@@ -580,7 +645,9 @@ class FireEscapeGame:
 
         target_cell = self.board.get_cell(next_row, next_col)
 
-        moved = self.player.move(direction, self.board)
+        # Allow moving into fire only in Manual Mode (player choice).
+        allow_fire_entry = self.active_mode == MODE_MANUAL
+        moved = self.player.move(direction, self.board, allow_fire=allow_fire_entry)
 
         if not moved:
             return
@@ -593,12 +660,16 @@ class FireEscapeGame:
             self.smoke_crossed_count += 1
             self._update_live_score()
 
-        current_position = (self.player.row, self.player.col)
+        # If the player moved into a cell that is now on fire, treat as immediate loss.
+        if target_cell == FIRE and moved:
+            # Manual moves into fire cause immediate game over.
+            if self.active_mode == MODE_MANUAL:
+                self.set_game_over("Game Over! You moved into fire.")
+                return
+            # AI should never move into fire because pathfinding avoids it.
 
-        if current_position in self.exits:
-            self.game_won = True
-            self.status_message = "You Escaped Successfully!"
-            self._finalize_score(True)
+        # Check for win after the move
+        if self.check_win_condition():
             return
 
         if self.active_mode == MODE_CHALLENGE:
@@ -610,12 +681,19 @@ class FireEscapeGame:
         path_found = self._refresh_ai_path_from_player()
 
         if not path_found:
-            # If A* cannot find any route to an exit, the player has no safe way out.
-            if CHALLENGE_END_GAME_ON_NO_PATH:
-                self.game_over = True
-                self.status_message = "No safe path found!"
+            # Mode-specific behavior when no path exists
+            if self.active_mode == MODE_CHALLENGE:
+                if CHALLENGE_END_GAME_ON_NO_PATH:
+                    self.set_game_over("No safe path found!")
+                else:
+                    self.status_message = "No safe path available. Try manual movement."
+            elif self.active_mode == MODE_AI_AUTO:
+                # Stop AI movement but do not end the game
+                self.ai_mode = False
+                self.current_path = []
+                self.status_message = "AI trapped: no safe path available"
             else:
-                # Allow player to continue trying
+                # Manual Mode: warn but let the player continue
                 self.status_message = "No safe path available. Try manual movement."
 
     def _spread_fire_after_player_move(self):
@@ -643,9 +721,7 @@ class FireEscapeGame:
 
         # Fire reaching the player ends the game immediately.
         if self.board.get_cell(self.player.row, self.player.col) == FIRE:
-            self.game_over = True
-            self.status_message = "Game Over! Fire reached you."
-            self._finalize_score(False)
+            self.set_game_over("Game Over! Fire reached you.")
             return
 
         # Re-run pathfinding so the AI hint and selected exit stay accurate after fire changes.
@@ -653,9 +729,7 @@ class FireEscapeGame:
         if not path_found:
             # Path invalidated by fire spread - apply configured behavior
             if CHALLENGE_END_GAME_ON_NO_PATH:
-                self.game_over = True
-                self.status_message = "No safe path found!"
-                self._finalize_score(False)
+                self.set_game_over("No safe path found!")
             else:
                 # Allow player to continue attempting escape
                 self.status_message = "No safe path available. Try manual movement."
@@ -817,6 +891,10 @@ class FireEscapeGame:
             if not self._is_current_path_valid():
                 # Path has been blocked - recalculate and apply configured behavior
                 self._handle_path_invalidated()
+
+        # After timer/path updates, check general lose conditions
+        if self.active_mode == MODE_CHALLENGE and not self.game_over and not self.game_won:
+            self.check_lose_conditions()
 
     def _update_active_mode(self):
         """Run per-frame logic for the active mode."""

@@ -36,7 +36,7 @@ class Player:
         """Return the player's current position as (x, y) for compatibility."""
         return (self.col, self.row)
 
-    def move(self, direction, board):
+    def move(self, direction, board, allow_fire=False):
         """Move the player one step in the given direction."""
         new_row, new_col = self.row, self.col
 
@@ -54,10 +54,13 @@ class Player:
         if not board.is_inside_grid(new_row, new_col):
             return False
 
-        if board.get_cell(new_row, new_col) == WALL:
+        target = board.get_cell(new_row, new_col)
+
+        if target == WALL:
             return False
-        # Do not allow moving into fire
-        if board.get_cell(new_row, new_col) == FIRE:
+
+        # Allow moving into fire only when explicitly permitted.
+        if target == FIRE and not allow_fire:
             return False
 
         old_position = (self.row, self.col)
@@ -87,7 +90,8 @@ class Player:
             return {"moved": False, "fire": False, "exit": False}
 
         target_cell = self.game_board.get_cell(target_row, target_col)
-        moved = self.move(direction, self.game_board)
+        # Default wrapper does not allow moving into fire
+        moved = self.move(direction, self.game_board, allow_fire=False)
 
         return {
             "moved": moved,

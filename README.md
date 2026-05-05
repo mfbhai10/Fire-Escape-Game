@@ -9,6 +9,10 @@ Smoke cells are allowed, but they are harder to cross.
 An AI helper uses the A\* Search algorithm to suggest the safest path to an exit.
 You can show or hide that path during the game.
 
+## The story of the game is:
+
+A player is trapped inside a burning building. The building contains walls, fire, smoke, and multiple exits. The player must escape safely before the fire spreads or the timer runs out. The game uses the A* Search algorithm to calculate the safest path to the best exit. The AI considers movement cost, danger cost, smoke cost, walls, fire, and distance to the exit. In Manual Mode, the player controls movement with AI path hints. In AI Auto Mode, the AI controls the player automatically. In Challenge Mode, fire spreads after each move, the timer counts down, and A* recalculates the safest route dynamically. The player wins by reaching an exit and loses if trapped, burned, or out of time.
+
 ## Features of Version 1
 
 - Grid-based board
