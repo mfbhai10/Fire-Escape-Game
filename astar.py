@@ -1,5 +1,21 @@
 """
-A* pathfinding for the Fire Escape AI Game.
+A* pathfinding for the Fire Escape AI Game. [VERSION 1 CORE]
+
+This module implements the A* algorithm for finding the safest path from
+the player to any exit. It's the core of both AI Auto Mode and the hint system.
+
+Key concepts:
+- A* uses f_score = g_score + heuristic to explore nodes efficiently
+- g_score: actual cost from start to current node
+- heuristic: estimated cost to nearest exit (Manhattan distance)
+- Smoke costs 4x more than empty, walls/fire are impassable (cost = infinity)
+- Returns lowest-cost path to whichever exit is nearest
+
+Usage:
+  path, cost, selected_exit = astar_search(board, start_pos, [exit_pos1, exit_pos2])
+  - path: list of (row, col) positions from start to exit
+  - cost: total movement cost of the path
+  - selected_exit: which exit was reached
 """
 
 import heapq
@@ -48,7 +64,11 @@ def _cell_cost(board, row, col):
 
 
 def astar_search(board, start, exits):
-    """Find the safest path from start to any of the given exits.
+    """Find the safest path from start to any of the given exits. [VERSION 1 CORE]
+
+    This is the core pathfinding algorithm used throughout the game. It uses the A*
+    algorithm with Manhattan distance heuristic to find the lowest-cost path to the
+    nearest exit. Smoke is allowed but costs 4x more than empty cells.
 
     Returns a tuple: (path, total_cost, selected_exit)
     - path: list of (row, col) from start to selected_exit (inclusive), or [] if no path
@@ -61,6 +81,8 @@ def astar_search(board, start, exits):
     """
     if not exits:
         return [], None, None
+
+    exit_set = set(exits)
 
     open_heap = []  # elements are (f_score, g_score, (row, col))
     came_from = {}
@@ -80,7 +102,7 @@ def astar_search(board, start, exits):
         closed_set.add(current)
 
         # Goal test: current node is any exit
-        if current in exits:
+        if current in exit_set:
             # Reconstruct and return the path, its total cost, and the exit reached
             path = reconstruct_path(came_from, current)
             total_cost = g_score.get(current, 0)

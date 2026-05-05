@@ -1,5 +1,16 @@
 """
 Player class for the Fire Escape AI Game.
+
+This module manages:
+- Player position (row, col) tracking
+- Movement validation (can't walk through walls or fire)
+- Move counting for scoring
+- Position conversion between board (row, col) and screen (x, y) formats
+
+The player is the human-controlled character trying to escape the fire.
+In Manual Mode, WASD keys control movement.
+In AI Auto Mode, the AI chooses movement direction.
+In Challenge Mode, the player must escape before time runs out.
 """
 
 from config import EXIT, FIRE, WALL

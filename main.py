@@ -1,5 +1,19 @@
 """
 Main game loop for the Fire Escape AI Game.
+
+This module handles:
+- Game state and mode management (Manual, AI Auto, Challenge)
+- Player input and event handling (WASD movement, mode switching)
+- Game loop and 60 FPS frame rate control
+- UI rendering (footer, menu, win/lose screens)
+- Score calculation and challenge mode timing
+- AI pathfinding requests and movement execution
+
+The game runs at 60 FPS, using pygame.time.get_ticks() for all timing
+to avoid blocking calls. The main game loop calls three methods each frame:
+1. handle_events() - Check for keyboard/window input
+2. _update_active_mode() - Update game state (timer, AI, fire spreading)
+3. draw() - Render the current game state to the screen
 """
 
 import sys
@@ -8,6 +22,7 @@ import pygame
 
 from config import (
     FPS,
+    CELL_SIZE,
     SCREEN_HEIGHT,
     SCREEN_WIDTH,
     TEXT_COLOR,
@@ -20,11 +35,15 @@ from config import (
     FIRE,
     WALL,
     AI_MOVE_DELAY_MS,
+    DIFFICULTY_EASY,
+    DIFFICULTY_MEDIUM,
+    DIFFICULTY_HARD,
     MODE_MANUAL,
     MODE_AI_AUTO,
     MODE_CHALLENGE,
     DEFAULT_DIFFICULTY,
     DIFFICULTY_SETTINGS,
+    CHALLENGE_END_GAME_ON_NO_PATH,
 )
 from game_board import GameBoard
 from player import Player
@@ -88,19 +107,21 @@ class FireEscapeGame:
     def __init__(self):
         """Set up Pygame and create the initial game state."""
         pygame.init()
-        self.screen = pygame.display.set_mode((SCREEN_WIDTH, WINDOW_HEIGHT))
+        self.selected_difficulty = DEFAULT_DIFFICULTY
+        self.screen = pygame.display.set_mode(self._get_window_size(self.selected_difficulty))
         pygame.display.set_caption("AI-Based Fire Escape Game Using A* Search")
 
         self.clock = pygame.time.Clock()
 
         # Create a font for the status UI area
         self.status_font = pygame.font.Font(None, 16)
+        self.menu_title_font = pygame.font.Font(None, 48)
+        self.menu_body_font = pygame.font.Font(None, 30)
 
         # Start menu state
         self.show_menu = True
         self.selected_mode = 1  # 1=Manual, 2=AI Auto, 3=Challenge
         self.active_mode = MODE_MANUAL
-        self.selected_difficulty = DEFAULT_DIFFICULTY
 
         self.running = True
         self.ai_move_delay = AI_MOVE_DELAY_MS
@@ -110,6 +131,134 @@ class FireEscapeGame:
 
         self._setup_game()
 
+    def _get_selected_mode_name(self):
+        """Return the label for the currently selected menu mode."""
+        if self.selected_mode == 2:
+            return "AI Auto Mode"
+        if self.selected_mode == 3:
+            return "Challenge Mode"
+        return "Manual Mode"
+
+    def _start_selected_game(self):
+        """Start a fresh game using the menu selections."""
+        self._setup_game()
+        self.show_menu = False
+        self._apply_selected_mode()
+
+    def _get_difficulty_settings(self):
+        """Return the selected difficulty settings with a safe fallback."""
+        return DIFFICULTY_SETTINGS.get(self.selected_difficulty, DIFFICULTY_SETTINGS[DEFAULT_DIFFICULTY])
+
+    def _get_time_limit_seconds(self):
+        """Return the time limit for the selected difficulty."""
+        return self._get_difficulty_settings()["time_limit_sec"]
+
+    def _get_score_multiplier(self):
+        """Return the difficulty multiplier used in the score formula."""
+        difficulty = self.selected_difficulty
+        if difficulty == DIFFICULTY_EASY:
+            return 1.0
+        if difficulty == DIFFICULTY_HARD:
+            return 2.0
+        return 1.5
+
+    def _calculate_score(self):
+        """Calculate the current score based on Challenge Mode state. [VERSION 3]
+
+        Score = (Remaining Time * 10 - Moves * Step Penalty - Smoke Crossed * 5) * Difficulty Multiplier
+        
+        The difficulty multiplier is applied after the base score is computed:
+        - Easy: 1.0x multiplier
+        - Medium: 1.5x multiplier  
+        - Hard: 2.0x multiplier
+        
+        The final score never goes below zero and is only calculated in Challenge Mode.
+        Returns 0 if not in Challenge Mode or if time is negative.
+        """
+        if not self.challenge_active or self.remaining_time_sec < 0:
+            return 0
+        
+        # Get penalty from difficulty settings (defaults to 2 if not found)
+        settings = self._get_difficulty_settings()
+        step_penalty = settings.get("score_step_penalty", 2)
+        multiplier = settings.get("score_multiplier", 1.0)
+        
+        # Calculate raw score from time, moves, and smoke
+        raw_score = (self.remaining_time_sec * 10) - (self.moves_count * step_penalty) - (self.smoke_crossed_count * 5)
+        
+        # Apply difficulty multiplier and clamp to minimum of 0
+        final_score = int(raw_score * multiplier)
+        return max(0, final_score)
+
+    def _update_live_score(self):
+        """Update the visible score while Challenge Mode is running."""
+        if not self.challenge_active:
+            self.live_score = self.final_score
+            return
+
+        self.live_score = self._calculate_score()
+
+    def _finalize_score(self, escaped_successfully):
+        """Lock in the final score when the game ends."""
+        if not self.challenge_active:
+            self.final_score = 0
+            self.live_score = 0
+            return
+
+        if escaped_successfully:
+            # Calculate and lock score on successful escape
+            self.final_score = self._calculate_score()
+        else:
+            # Losing sets score to 0 (no points for failure)
+            self.final_score = 0
+
+        self.live_score = self.final_score
+
+    def _start_challenge_timer(self):
+        """Start a fresh countdown for Challenge Mode.
+
+        The timer uses pygame.time.get_ticks() so it stays simple and does not rely
+        on sleep-based timing.
+        """
+        self.game_start_ticks = pygame.time.get_ticks()
+        self.last_fire_spread_time = self.game_start_ticks
+        self.challenge_start_ticks = self.game_start_ticks
+        self.time_limit_sec = self._get_time_limit_seconds()
+        self.remaining_time_sec = self.time_limit_sec
+        self.challenge_time_limit_sec = self.time_limit_sec
+        self.challenge_remaining_sec = self.remaining_time_sec
+
+    def _update_challenge_timer(self):
+        """Update the countdown only while Challenge Mode is active. [VERSION 3]
+        
+        Timer uses pygame.time.get_ticks() for frame-independent timing and stops
+        updating when game_over or game_won becomes True to lock the final time.
+        """
+        if not self.challenge_active or self.game_over or self.game_won:
+            return
+
+        elapsed_ms = pygame.time.get_ticks() - self.game_start_ticks
+        elapsed_sec = max(0, elapsed_ms // 1000)
+        self.remaining_time_sec = max(0, self.time_limit_sec - elapsed_sec)
+        self.challenge_remaining_sec = self.remaining_time_sec
+        self._update_live_score()
+
+        if self.remaining_time_sec <= 0:
+            self.game_over = True
+            self.status_message = "Time Up! Game Over"
+            self._finalize_score(False)
+
+    def _get_window_size(self, difficulty):
+        """Calculate the display size for the selected difficulty."""
+        settings = DIFFICULTY_SETTINGS.get(difficulty, DIFFICULTY_SETTINGS[DEFAULT_DIFFICULTY])
+        board_width = settings["cols"] * CELL_SIZE
+        board_height = settings["rows"] * CELL_SIZE
+        return (board_width, board_height + FOOTER_HEIGHT)
+
+    def _resize_window_for_board(self):
+        """Resize the window to match the current board dimensions."""
+        self.screen = pygame.display.set_mode(self._get_window_size(self.selected_difficulty))
+
     def _reset_runtime_state(self):
         """Reset all gameplay variables that should return to defaults on restart."""
         self.game_over = False
@@ -117,6 +266,8 @@ class FireEscapeGame:
         self.show_path = True
         self.status_message = ""
         self.moves_count = 0
+        self.game_start_ticks = 0
+        self.last_fire_spread_time = 0
 
         # AI Auto Mode runtime values
         self.ai_mode = False
@@ -130,10 +281,18 @@ class FireEscapeGame:
         # Challenge Mode runtime values (placeholders for Version 3)
         self.challenge_active = False
         self.challenge_score = 0
-        self.challenge_time_limit_sec = DIFFICULTY_SETTINGS[self.selected_difficulty]["time_limit_sec"]
+        self.smoke_crossed_count = 0
+        self.live_score = 0
+        self.final_score = 0
+        difficulty_settings = self._get_difficulty_settings()
+        self.challenge_time_limit_sec = difficulty_settings["time_limit_sec"]
         self.challenge_remaining_sec = self.challenge_time_limit_sec
         self.challenge_start_ticks = 0
         self.environment_changed = False
+        self.time_limit_sec = difficulty_settings["time_limit_sec"]
+        self.remaining_time_sec = self.time_limit_sec
+        self.fire_spread_interval_ms = difficulty_settings["fire_spread_interval_ms"]
+        self.fire_spread_probability = difficulty_settings["fire_spread_probability"]
 
         # Temporary on-screen messages
         self.temp_message = None
@@ -145,6 +304,27 @@ class FireEscapeGame:
         self.ai_mode = False
         self.challenge_active = False
         self.current_path = []
+
+    def _set_mode_from_key(self, mode_key):
+        """Switch to the selected mode while keeping the current board state.
+
+        Challenge Mode resets its timer and mode-specific runtime values when it is
+        activated so it behaves like a fresh challenge.
+        """
+        if mode_key == MODE_CHALLENGE:
+            self._set_mode_challenge()
+        elif mode_key == MODE_AI_AUTO:
+            self._set_mode_ai_auto()
+        else:
+            self._set_mode_manual()
+
+    def get_mode_display_name(self):
+        """Return a user-friendly mode name for the HUD."""
+        if self.active_mode == MODE_CHALLENGE:
+            return "Challenge Mode"
+        if self.active_mode == MODE_AI_AUTO:
+            return "AI Auto Mode"
+        return "Manual Mode"
 
     def _set_mode_ai_auto(self):
         """Activate AI Auto Mode state and prepare the first movement path."""
@@ -161,9 +341,11 @@ class FireEscapeGame:
         self.active_mode = MODE_CHALLENGE
         self.ai_mode = False
         self.challenge_active = True
-        self.challenge_time_limit_sec = DIFFICULTY_SETTINGS[self.selected_difficulty]["time_limit_sec"]
-        self.challenge_remaining_sec = self.challenge_time_limit_sec
-        self.challenge_start_ticks = pygame.time.get_ticks()
+        self._start_challenge_timer()
+        self.smoke_crossed_count = 0
+        self.live_score = 0
+        self.final_score = 0
+        self._update_live_score()
 
     def _apply_selected_mode(self):
         """Apply the mode selected on the start menu."""
@@ -175,7 +357,13 @@ class FireEscapeGame:
             self._set_mode_manual()
 
     def _refresh_ai_path_from_player(self):
-        """Recalculate path metadata from the player's current position."""
+        """Recalculate path metadata from the player's current position. [VERSION 1 CORE]
+        
+        Called after every player move to update the AI's pathfinding. Uses A* search
+        to find the safest route from the player to the nearest exit. This method
+        runs in both AI Auto Mode and Challenge Mode to keep the path current.
+        """
+        self.exits = self.board.find_exits()
         current_position = (self.player.row, self.player.col)
         path, cost, sel = astar_search(self.board, current_position, self.exits)
         self.ai_path = path or []
@@ -184,9 +372,62 @@ class FireEscapeGame:
         self.environment_changed = False
         return bool(path)
 
+    def _is_current_path_valid(self):
+        """Check if the current path is still safe to traverse.
+        
+        Returns False if any cell in the path is now FIRE or WALL, which means
+        the path has been blocked and needs recalculation. Returns True if the
+        path is still safe or if the path is empty.
+        
+        This method is called continuously in Challenge Mode to detect when
+        fire spread or other board changes invalidate the cached path.
+        """
+        if not self.ai_path:
+            # Empty path is trivially valid
+            return True
+        
+        # Check each cell in the current path
+        for row, col in self.ai_path:
+            if not self.board.is_inside_grid(row, col):
+                # Cell is out of bounds - path is invalid
+                return False
+            
+            cell = self.board.get_cell(row, col)
+            
+            # Cells blocked by FIRE or WALL make the path invalid
+            if cell == FIRE or cell == WALL:
+                return False
+        
+        return True
+
+    def _handle_path_invalidated(self):
+        """Handle the case when the current path becomes blocked during Challenge Mode.
+        
+        Attempts to recalculate the path. If no safe path exists and
+        CHALLENGE_END_GAME_ON_NO_PATH is True, ends the game with a message.
+        If False, allows the player to continue attempting manual movement.
+        """
+        # Try to find a new path
+        path_found = self._refresh_ai_path_from_player()
+        
+        if not path_found:
+            # No path exists - apply the configured behavior
+            if CHALLENGE_END_GAME_ON_NO_PATH:
+                # End the game immediately
+                self.game_over = True
+                self.status_message = "No safe path available! Game Over."
+                self._finalize_score(False)
+            else:
+                # Allow player to continue manually
+                self.ai_path = []
+                self.ai_path_cost = 0
+                self.ai_selected_exit = None
+                self.status_message = "No safe path available. Try manual movement."
+
     def _setup_game(self):
         """Create a fresh board, player, and initial AI path."""
-        self.board = GameBoard()
+        self.board = GameBoard(self.selected_difficulty)
+        self._resize_window_for_board()
         self.player_start = self.board.find_player()
         self.player = Player(self.board.player_start, self.board)
         self.exits = self.board.find_exits()
@@ -200,6 +441,42 @@ class FireEscapeGame:
         if not path_found and (self.player.row, self.player.col) not in self.exits:
             self.game_over = True
             self.status_message = "No safe path found!"
+
+    def reset_game(self):
+        """Reset the current game while preserving difficulty and mode selection.
+        
+        This is called when the player presses R during gameplay to start a fresh
+        round with a new random board without returning to the menu. All game state
+        is reset, including:
+        - Player position
+        - Random map (newly generated)
+        - Timer and score
+        - Move count and smoke count
+        - AI path, selected exit, and path cost
+        - Win/loss state and status messages
+        - Fire and smoke cells (new map has fresh fire/smoke)
+        
+        The selected difficulty and game mode are preserved.
+        """
+        # Save the current mode selection so we can restore it after setup
+        current_mode_selection = self.selected_mode
+        current_active_mode = self.active_mode
+        
+        # Generate fresh board, reset all runtime state
+        self._setup_game()
+        
+        # Restore the mode selection and reactivate it
+        self.selected_mode = current_mode_selection
+        
+        # Restore the active mode, but handle AI Auto Mode specially:
+        # If AI Auto Mode was active, restart it; if Manual Mode was active, restore it
+        if current_active_mode == MODE_AI_AUTO:
+            self._set_mode_ai_auto()
+        elif current_active_mode == MODE_CHALLENGE:
+            self._set_mode_challenge()
+        else:
+            # Default to Manual Mode
+            self._set_mode_manual()
 
     def restart_game(self):
         """Restart the game from the initial state and return to menu."""
@@ -225,10 +502,16 @@ class FireEscapeGame:
                     self.selected_mode = 2
                 elif event.key == pygame.K_3:
                     self.selected_mode = 3
+                elif event.key == pygame.K_e:
+                    self.selected_difficulty = DIFFICULTY_EASY
+                elif event.key == pygame.K_m:
+                    self.selected_difficulty = DIFFICULTY_MEDIUM
+                elif event.key == pygame.K_h:
+                    self.selected_difficulty = DIFFICULTY_HARD
                 elif event.key == pygame.K_RETURN:
-                    # Start game with selection
-                    self.show_menu = False
-                    self._apply_selected_mode()
+                    self._start_selected_game()
+                elif event.key == pygame.K_r:
+                    self._start_selected_game()
                 elif event.key == pygame.K_ESCAPE:
                     self.running = False
                 continue
@@ -238,9 +521,17 @@ class FireEscapeGame:
                 self.running = False
             elif event.key == pygame.K_h:
                 self.show_path = not self.show_path
+            elif event.key == pygame.K_c:
+                # Toggle Challenge Mode separately from AI Auto Mode.
+                if self.active_mode == MODE_CHALLENGE:
+                    self._set_mode_manual()
+                    self.challenge_active = False
+                    self.current_path = []
+                else:
+                    self._set_mode_challenge()
             elif event.key == pygame.K_r:
-                # Restart and return to the selection menu
-                self.restart_game()
+                # Reset the current game with a new random board, keeping mode/difficulty.
+                self.reset_game()
                 continue
             elif event.key == pygame.K_SPACE:
                 # Toggle AI Auto Mode
@@ -261,9 +552,33 @@ class FireEscapeGame:
                     self.move_player("RIGHT")
 
     def move_player(self, direction):
-        """Move the player and update the game state."""
+        """Move the player and update the game state. [VERSION 1 CORE]
+        
+        This is the main method that processes every player movement. It:
+        - Validates the move is allowed (not wall/fire, within grid)
+        - Tracks smoke crossings and moves count
+        - Detects win condition (reached exit)
+        - Spreads fire in Challenge Mode
+        - Recalculates A* path for next frame
+        - Detects loss condition (no safe path)
+        
+        Called from handle_events() for manual movement or from _execute_ai_step() 
+        for AI movement.
+        """
         if self.game_over or self.game_won:
             return
+
+        next_row, next_col = self.player.row, self.player.col
+        if direction == "UP":
+            next_row -= 1
+        elif direction == "DOWN":
+            next_row += 1
+        elif direction == "LEFT":
+            next_col -= 1
+        elif direction == "RIGHT":
+            next_col += 1
+
+        target_cell = self.board.get_cell(next_row, next_col)
 
         moved = self.player.move(direction, self.board)
 
@@ -273,20 +588,77 @@ class FireEscapeGame:
         self.moves_count = self.player.moves
         self.environment_changed = True
 
+        # Track smoke crossings for scoring only when the player actually steps into smoke.
+        if self.active_mode == MODE_CHALLENGE and target_cell == SMOKE:
+            self.smoke_crossed_count += 1
+            self._update_live_score()
+
         current_position = (self.player.row, self.player.col)
 
         if current_position in self.exits:
             self.game_won = True
             self.status_message = "You Escaped Successfully!"
+            self._finalize_score(True)
             return
+
+        if self.active_mode == MODE_CHALLENGE:
+            self._spread_fire_after_player_move()
+            if self.game_over or self.game_won:
+                return
 
         # Recalculate the safest route after every move so the AI path stays current.
         path_found = self._refresh_ai_path_from_player()
 
         if not path_found:
             # If A* cannot find any route to an exit, the player has no safe way out.
+            if CHALLENGE_END_GAME_ON_NO_PATH:
+                self.game_over = True
+                self.status_message = "No safe path found!"
+            else:
+                # Allow player to continue trying
+                self.status_message = "No safe path available. Try manual movement."
+
+    def _spread_fire_after_player_move(self):
+        """Spread fire once after the player moves in Challenge Mode. [VERSION 3]
+
+        This uses a snapshot of the current fire cells so newly created fire cannot
+        spread again during the same turn. Empty cells may become smoke first, and
+        smoke can ignite later if it is near fire.
+        
+        This method is only called in Challenge Mode after each valid player move.
+        """
+        if self.game_over or self.game_won:
+            return
+
+        settings = self._get_difficulty_settings()
+        changed_cells = self.board.spread_fire(
+            settings["fire_spread_probability"],
+            allow_fire_overwrite_exits=settings.get("allow_fire_overwrite_exits", False),
+        )
+
+        if not changed_cells:
+            return
+
+        self.environment_changed = True
+
+        # Fire reaching the player ends the game immediately.
+        if self.board.get_cell(self.player.row, self.player.col) == FIRE:
             self.game_over = True
-            self.status_message = "No safe path found!"
+            self.status_message = "Game Over! Fire reached you."
+            self._finalize_score(False)
+            return
+
+        # Re-run pathfinding so the AI hint and selected exit stay accurate after fire changes.
+        path_found = self._refresh_ai_path_from_player()
+        if not path_found:
+            # Path invalidated by fire spread - apply configured behavior
+            if CHALLENGE_END_GAME_ON_NO_PATH:
+                self.game_over = True
+                self.status_message = "No safe path found!"
+                self._finalize_score(False)
+            else:
+                # Allow player to continue attempting escape
+                self.status_message = "No safe path available. Try manual movement."
 
     def _execute_ai_step(self):
         """Execute one step of AI Auto Mode with dynamic path recalculation and replanning."""
@@ -415,32 +787,50 @@ class FireEscapeGame:
         self.temp_message_until = now + 600
         return True
 
-    def _update_challenge_runtime(self):
-        """Update challenge-only runtime values.
-
-        Version 3 will expand this with countdown loss, fire spread, and scoring rules.
+    def _get_path_status_display(self):
+        """Generate a display-friendly path status string for the HUD.
+        
+        Returns a tuple of (status_text, color) that indicates:
+        - Whether a path was found
+        - Whether the path is currently valid (all cells traversable)
+        - Any relevant error messages
         """
-        if not self.challenge_active:
-            return
+        if not self.ai_path:
+            return "Path: NOT FOUND", (220, 53, 69)  # Red
+        
+        if not self._is_current_path_valid():
+            return "Path: BLOCKED (recalculating)", (255, 193, 7)  # Yellow/orange
+        
+        return "Path: SAFE", (46, 204, 113)  # Green
 
-        if self.game_over or self.game_won:
-            return
+    def _get_difficulty_settings(self):
+        """Get the settings for the currently selected difficulty."""
+        return DIFFICULTY_SETTINGS.get(self.selected_difficulty, DIFFICULTY_SETTINGS[DEFAULT_DIFFICULTY])
 
-        elapsed_ms = pygame.time.get_ticks() - self.challenge_start_ticks
-        elapsed_sec = max(0, elapsed_ms // 1000)
-        self.challenge_remaining_sec = max(0, self.challenge_time_limit_sec - elapsed_sec)
+    def _update_challenge_runtime(self):
+        """Update Challenge Mode runtime values and validate path safety."""
+        self._update_challenge_timer()
+        
+        # In Challenge Mode, continuously validate that the cached path is still safe.
+        # If fire or walls block the path, trigger recalculation with the configured behavior.
+        if self.active_mode == MODE_CHALLENGE and not self.game_over and not self.game_won:
+            if not self._is_current_path_valid():
+                # Path has been blocked - recalculate and apply configured behavior
+                self._handle_path_invalidated()
 
     def _update_active_mode(self):
         """Run per-frame logic for the active mode."""
+        if self.show_menu:
+            return
+
+        self._update_challenge_runtime()
+
         if self.active_mode == MODE_AI_AUTO and self.ai_mode and not self.game_over and not self.game_won:
             current_time = pygame.time.get_ticks()
             # Move only if enough milliseconds have passed since the last move
             if current_time - self.last_ai_move_time >= self.ai_move_delay:
                 self.last_ai_move_time = current_time
                 self._execute_ai_step()
-
-        if self.active_mode == MODE_CHALLENGE:
-            self._update_challenge_runtime()
 
     def draw_block_text(self, text, x, y, color, scale=1, spacing=1):
         """Draw text using a tiny built-in block font."""
@@ -479,96 +869,253 @@ class FireEscapeGame:
         
         return total_cost
 
+    def _render_ui_text(self, text, size=16, color=(33, 37, 41), bold=False):
+        """Render text with fallback support for pygame.font."""
+        try:
+            font = pygame.font.Font(None, size)
+            if bold:
+                font.set_bold(True)
+            return font.render(text, True, color)
+        except Exception:
+            # Fallback: use default font if custom fails
+            return pygame.font.Font(None, 24).render(text, True, color)
+
     def draw_footer(self):
-        """Draw the instructions, move count, and status text at the bottom."""
-        footer_top = SCREEN_HEIGHT
-        footer_height = FOOTER_HEIGHT
+        """Draw an improved, organized UI panel at the bottom of the screen. [VERSION 2]"""
+        footer_top = self.board.rows * CELL_SIZE
+        footer_width = self.board.cols * CELL_SIZE
 
-        panel_rect = pygame.Rect(0, footer_top, SCREEN_WIDTH, footer_height)
+        # Background panel
+        panel_rect = pygame.Rect(0, footer_top, footer_width, FOOTER_HEIGHT)
         pygame.draw.rect(self.screen, (242, 244, 248), panel_rect)
-        pygame.draw.rect(self.screen, (210, 216, 224), panel_rect, 2)
+        pygame.draw.rect(self.screen, (180, 188, 200), panel_rect, 2)
 
-        accent_rect = pygame.Rect(0, footer_top, SCREEN_WIDTH, 6)
+        # Top accent line
+        accent_rect = pygame.Rect(0, footer_top, footer_width, 4)
         pygame.draw.rect(self.screen, (74, 144, 226), accent_rect)
 
-        title_text = "AI-Based Fire Escape Game"
-        subtitle_text = "Using A* Search"
-        moves_text = f"Moves: {self.moves_count}"
-        mode_text = f"Mode: {self.active_mode}"
-        controls_text = "WASD: Move | SPACE: Toggle AI | H: AI Path | R: Restart | ESC: Quit"
-        if self.active_mode == MODE_CHALLENGE:
-            controls_text = "WASD: Move | H: AI Path | R: Restart | ESC: Quit"
-
-        # Calculate path information for the status display
+        # Gather game state information
+        score_value = self.final_score if (self.game_over or self.game_won) else self.live_score
         path_found = len(self.ai_path) > 0
         remaining_steps = len(self.current_path)
-        path_cost = int(self.ai_path_cost) if path_found and self.ai_path_cost is not None else 0
-
+        path_cost = int(self.ai_path_cost) if path_found and self.ai_path_cost else 0
+        
+        # Determine status message and color
         if self.game_won:
-            status_text = "You Escaped Successfully!"
+            status_msg = "✓ Escaped Successfully!"
+            status_color = (46, 204, 113)
         elif self.game_over:
-            status_text = self.status_message or "Game Over!"
+            status_msg = "✗ Game Over"
+            status_color = (220, 53, 69)
         else:
-            status_text = self.status_message or "Find a safe path to an exit."
+            path_status, path_status_color = self._get_path_status_display()
+            if "NOT FOUND" in path_status:
+                status_msg = "No safe path available"
+                status_color = (220, 53, 69)
+            elif "BLOCKED" in path_status:
+                status_msg = "Path blocked - recalculating..."
+                status_color = (255, 193, 7)
+            else:
+                status_msg = "Safe path found"
+                status_color = (46, 204, 113)
 
-        self.draw_block_text(title_text, 10, footer_top + 12, TEXT_COLOR, scale=2, spacing=2)
-        self.draw_block_text(subtitle_text, 10, footer_top + 28, (90, 96, 105), scale=1, spacing=1)
-        self.draw_block_text(moves_text, 10, footer_top + 48, TEXT_COLOR, scale=1, spacing=1)
-        self.draw_block_text(mode_text, 140, footer_top + 48, TEXT_COLOR, scale=1, spacing=1)
-        if self.active_mode == MODE_CHALLENGE:
-            challenge_text = (
-                f"Difficulty: {self.selected_difficulty} | "
-                f"Time Left: {self.challenge_remaining_sec}s | "
-                f"Score: {self.challenge_score}"
-            )
-            self.draw_block_text(challenge_text, 10, footer_top + 60, TEXT_COLOR, scale=1, spacing=1)
-            status_y_text = footer_top + 78
+        # Check if there's a temporary message to display
+        current_time = pygame.time.get_ticks()
+        if self.temp_message and current_time < self.temp_message_until:
+            status_msg = self.temp_message
+            status_color = (255, 193, 7)  # Yellow for temporary messages
+
+        # Layout: 4 rows of information
+        y_pos = footer_top + 8
+        line_height = 30
+
+        # Row 1: Title and Mode
+        title_text = self._render_ui_text("Fire Escape AI", size=18, bold=True)
+        mode_text = self._render_ui_text(
+            f"Mode: {self.get_mode_display_name()} | Difficulty: {self.selected_difficulty}",
+            size=14,
+        )
+        self.screen.blit(title_text, (10, y_pos))
+        self.screen.blit(mode_text, (220, y_pos))
+        y_pos += line_height
+
+        # Row 2: Game Stats
+        moves_text = self._render_ui_text(f"Moves: {self.moves_count}", size=13)
+        time_text = self._render_ui_text(f"Time: {self.remaining_time_sec}s", size=13)
+        score_text = self._render_ui_text(f"Score: {score_value}", size=13)
+        smoke_text = self._render_ui_text(f"Smoke Crossed: {self.smoke_crossed_count}", size=13)
+        
+        self.screen.blit(moves_text, (10, y_pos))
+        self.screen.blit(time_text, (120, y_pos))
+        self.screen.blit(score_text, (220, y_pos))
+        self.screen.blit(smoke_text, (320, y_pos))
+        y_pos += line_height
+
+        # Row 3: Path Info
+        if self.ai_selected_exit is not None:
+            exit_row, exit_col = self.ai_selected_exit
+            exit_text_str = f"Exit: ({exit_row}, {exit_col})"
         else:
-            status_y_text = footer_top + 72
-        self.draw_block_text(status_text, 10, status_y_text, (180, 78, 48) if self.game_over else TEXT_COLOR, scale=1, spacing=1)
-        self.draw_block_text(controls_text, 10, footer_top + 96, (90, 96, 105), scale=1, spacing=1)
+            exit_text_str = "Exit: None"
+        
+        path_cost_text = self._render_ui_text(f"Path Cost: {path_cost}", size=13)
+        steps_text = self._render_ui_text(f"Steps: {remaining_steps}", size=13)
+        exit_info_text = self._render_ui_text(exit_text_str, size=13)
+        
+        self.screen.blit(path_cost_text, (10, y_pos))
+        self.screen.blit(steps_text, (140, y_pos))
+        self.screen.blit(exit_info_text, (240, y_pos))
+        y_pos += line_height
 
-        # Draw the status panel background
-        status_y = footer_top + 10
-        path_status = "Path: Found" if path_found else "Path: NOT FOUND"
-        path_status_color = (46, 204, 113) if path_found else (220, 53, 69)
-
-        status_text1 = self.status_font.render(f"Mode: {self.active_mode}", True, TEXT_COLOR)
-        status_text2 = self.status_font.render(path_status, True, path_status_color)
-        status_text3 = self.status_font.render(f"Path Cost: {path_cost} | Steps: {remaining_steps}", True, TEXT_COLOR)
-
-        status_panel = pygame.Rect(10, status_y + 115, SCREEN_WIDTH - 20, 12)
-        pygame.draw.rect(self.screen, (240, 240, 245), status_panel)
-        pygame.draw.rect(self.screen, (200, 210, 220), status_panel, 1)
-
-        self.screen.blit(status_text1, (15, status_y + 117))
-        self.screen.blit(status_text2, (120, status_y + 117))
-        self.screen.blit(status_text3, (220, status_y + 117))
+        # Row 4: Status and Controls
+        status_text = self._render_ui_text(status_msg, size=14, color=status_color, bold=True)
+        self.screen.blit(status_text, (10, y_pos))
+        
+        # Controls legend
+        controls_text = self._render_ui_text(
+            "W/A/S/D: Move | H: Path | SPACE: AI | R: Menu | ESC: Quit",
+            size=12,
+            color=(90, 96, 105),
+        )
+        self.screen.blit(controls_text, (10, y_pos + 22))
 
     def draw_menu(self):
         """Draw simple keyboard-based menu at startup."""
         self.screen.fill((30, 30, 35))
-        title = self.status_font.render("Fire Escape AI Game - Mode Selection", True, (240, 240, 245))
-        opt1 = self.status_font.render("1 - Manual Mode", True, (200, 200, 200))
-        opt2 = self.status_font.render("2 - AI Auto Mode", True, (200, 200, 200))
-        opt3 = self.status_font.render("3 - Challenge Mode", True, (200, 200, 200))
-        hint = self.status_font.render("Use keys 1/2/3 to select. Press ENTER to start.", True, (180, 180, 180))
-        selected = self.status_font.render(f"Selected: {self.selected_mode}", True, (140, 220, 140))
+        title = self.menu_title_font.render("Fire Escape AI Game", True, (240, 240, 245))
+        subtitle = self.menu_body_font.render("Simple Menu", True, (180, 180, 180))
+
+        mode_label = self.menu_body_font.render(
+            f"Selected mode: {self._get_selected_mode_name()}",
+            True,
+            (140, 220, 140),
+        )
+        difficulty_label = self.menu_body_font.render(
+            f"Selected difficulty: {self.selected_difficulty}",
+            True,
+            (140, 220, 140),
+        )
+        mode_help = self.menu_body_font.render(
+            "1 = Manual Mode   2 = AI Auto Mode   3 = Challenge Mode",
+            True,
+            (200, 200, 200),
+        )
+        difficulty_help = self.menu_body_font.render(
+            "E = Easy   M = Medium   H = Hard",
+            True,
+            (200, 200, 200),
+        )
+        start_help = self.menu_body_font.render("Press ENTER or R to start", True, (240, 240, 245))
+        quit_help = self.menu_body_font.render("Press ESC to quit", True, (180, 180, 180))
 
         self.screen.blit(title, (20, 20))
-        self.screen.blit(opt1, (40, 70))
-        self.screen.blit(opt2, (40, 100))
-        self.screen.blit(opt3, (40, 130))
-        self.screen.blit(hint, (20, 180))
-        self.screen.blit(selected, (20, 220))
+        self.screen.blit(subtitle, (20, 65))
+        self.screen.blit(mode_label, (20, 120))
+        self.screen.blit(difficulty_label, (20, 155))
+        self.screen.blit(mode_help, (20, 210))
+        self.screen.blit(difficulty_help, (20, 245))
+        self.screen.blit(start_help, (20, 300))
+        self.screen.blit(quit_help, (20, 335))
         pygame.display.flip()
 
+    def draw_win_screen(self):
+        """Draw the win/escaped screen with game statistics."""
+        # Semi-transparent overlay
+        overlay = pygame.Surface((self.board.cols * CELL_SIZE, self.board.rows * CELL_SIZE))
+        overlay.set_alpha(200)
+        overlay.fill((30, 100, 30))  # Green tint
+        self.screen.blit(overlay, (0, 0))
+
+        # Calculate center position
+        screen_width = self.board.cols * CELL_SIZE
+        screen_height = self.board.rows * CELL_SIZE
+        center_x = screen_width // 2
+
+        # Title
+        title_font = pygame.font.Font(None, 72)
+        title_text = title_font.render("YOU ESCAPED!", True, (100, 255, 100))
+        title_rect = title_text.get_rect(center=(center_x, 60))
+        self.screen.blit(title_text, title_rect)
+
+        # Stats box
+        stats_font = pygame.font.Font(None, 32)
+        info_font = pygame.font.Font(None, 24)
+
+        stats = [
+            f"Final Score: {self.final_score}",
+            f"Difficulty: {self.selected_difficulty}",
+            f"Total Moves: {self.moves_count}",
+            f"Smoke Cells Crossed: {self.smoke_crossed_count}",
+            f"Remaining Time: {self.remaining_time_sec}s",
+        ]
+
+        y_pos = 160
+        for stat in stats:
+            stat_text = info_font.render(stat, True, (255, 255, 255))
+            stat_rect = stat_text.get_rect(center=(center_x, y_pos))
+            self.screen.blit(stat_text, stat_rect)
+            y_pos += 50
+
+        # Controls
+        controls_font = pygame.font.Font(None, 22)
+        control_text = controls_font.render("Press R to restart  |  Press ESC to quit", True, (200, 255, 200))
+        control_rect = control_text.get_rect(center=(center_x, y_pos + 40))
+        self.screen.blit(control_text, control_rect)
+
+    def draw_game_over_screen(self):
+        """Draw the game over screen with loss information."""
+        # Semi-transparent overlay
+        overlay = pygame.Surface((self.board.cols * CELL_SIZE, self.board.rows * CELL_SIZE))
+        overlay.set_alpha(200)
+        overlay.fill((100, 30, 30))  # Red tint
+        self.screen.blit(overlay, (0, 0))
+
+        # Calculate center position
+        screen_width = self.board.cols * CELL_SIZE
+        screen_height = self.board.rows * CELL_SIZE
+        center_x = screen_width // 2
+
+        # Title
+        title_font = pygame.font.Font(None, 72)
+        title_text = title_font.render("GAME OVER", True, (255, 100, 100))
+        title_rect = title_text.get_rect(center=(center_x, 60))
+        self.screen.blit(title_text, title_rect)
+
+        # Reason for losing
+        reason_font = pygame.font.Font(None, 28)
+        reason_text = reason_font.render(self.status_message, True, (255, 200, 200))
+        reason_rect = reason_text.get_rect(center=(center_x, 140))
+        self.screen.blit(reason_text, reason_rect)
+
+        # Stats box
+        info_font = pygame.font.Font(None, 24)
+
+        stats = [
+            f"Difficulty: {self.selected_difficulty}",
+            f"Total Moves: {self.moves_count}",
+            f"Smoke Cells Crossed: {self.smoke_crossed_count}",
+        ]
+
+        y_pos = 220
+        for stat in stats:
+            stat_text = info_font.render(stat, True, (255, 255, 255))
+            stat_rect = stat_text.get_rect(center=(center_x, y_pos))
+            self.screen.blit(stat_text, stat_rect)
+            y_pos += 50
+
+        # Controls
+        controls_font = pygame.font.Font(None, 22)
+        control_text = controls_font.render("Press R to restart  |  Press ESC to quit", True, (200, 100, 100))
+        control_rect = control_text.get_rect(center=(center_x, y_pos + 40))
+        self.screen.blit(control_text, control_rect)
+
     def draw(self):
-        """Draw the board, optional AI path, and footer text or menu."""
+        """Draw the board, optional AI path, footer text, menu, or end screens."""
         if self.show_menu:
             self.draw_menu()
             return
 
+        # Draw the game board first
         # In AI mode, show the remaining path; otherwise show the full AI path
         if self.game_won:
             # Player reached exit: do not show path overlays
@@ -587,6 +1134,13 @@ class FireEscapeGame:
 
         self.board.draw(self.screen, path_to_draw, next_cell=next_cell, visited=visited)
         self.draw_footer()
+
+        # Draw end screens on top of the board
+        if self.game_won:
+            self.draw_win_screen()
+        elif self.game_over:
+            self.draw_game_over_screen()
+
         pygame.display.flip()
 
     def run(self):
