@@ -13,12 +13,14 @@
 **Problem**: Two score calculation methods (`_calculate_score()` and `_calculate_score_from_state()`) doing similar work with different approaches.
 
 **Solution**: Merged into single unified `_calculate_score()` method that:
+
 - Reads from game state instead of taking parameters
 - Gets penalty from difficulty settings (more flexible)
 - Includes comments explaining each calculation step
 - Returns 0 for non-Challenge Mode (safe default)
 
 **Code Changes**:
+
 - **Removed**: Parameter-based score calculation
 - **Added**: State-based calculation with settings lookup
 - **Benefit**: Single source of truth for scoring logic
@@ -32,15 +34,17 @@
 **Problem**: Brief module docstrings didn't explain purpose, especially for beginners.
 
 **Solution**: Expanded all module docstrings to include:
+
 - Clear description of module purpose
 - List of key responsibilities
 - Important concepts and terminology
 - Usage examples (where applicable)
 
 **Files Updated**:
-1. **main.py**: Added explanation of game loop structure (handle_events → _update_active_mode → draw)
-2. **game_board.py**: Explained grid management, fire spreading, A* validation
-3. **astar.py**: Explained A* algorithm, cost structure, and usage
+
+1. **main.py**: Added explanation of game loop structure (handle_events → \_update_active_mode → draw)
+2. **game_board.py**: Explained grid management, fire spreading, A\* validation
+3. **astar.py**: Explained A\* algorithm, cost structure, and usage
 4. **player.py**: Explained player management and position tracking
 5. **config.py**: Explained how to customize game balance
 
@@ -51,11 +55,13 @@
 **Status**: Already implemented, confirmed in place
 
 **Markers Applied**:
-- `[VERSION 1 CORE]` - Core A* and gameplay
+
+- `[VERSION 1 CORE]` - Core A\* and gameplay
 - `[VERSION 2]` - UI and animations
 - `[VERSION 3]` - Challenge mode and fire spreading
 
 **Methods Marked**:
+
 - `astar_search()` - [VERSION 1 CORE]
 - `move_player()` - [VERSION 1 CORE]
 - `_refresh_ai_path_from_player()` - [VERSION 1 CORE]
@@ -75,25 +81,26 @@
 
 ### Before Refactoring
 
-| Aspect | Before | Issue |
-|--------|--------|-------|
-| Score Calculation | 2 methods | Confusing which to use |
-| Module Documentation | 1-line docstrings | Unclear purpose |
-| Feature Identification | No markers | Hard to see what's new |
+| Aspect                 | Before            | Issue                  |
+| ---------------------- | ----------------- | ---------------------- |
+| Score Calculation      | 2 methods         | Confusing which to use |
+| Module Documentation   | 1-line docstrings | Unclear purpose        |
+| Feature Identification | No markers        | Hard to see what's new |
 
 ### After Refactoring
 
-| Aspect | After | Benefit |
-|--------|-------|---------|
-| Score Calculation | 1 unified method | Clear, single implementation |
-| Module Documentation | 10-15 line docstrings | Clear purpose and usage |
-| Feature Identification | Version markers on methods | Easy to trace features |
+| Aspect                 | After                      | Benefit                      |
+| ---------------------- | -------------------------- | ---------------------------- |
+| Score Calculation      | 1 unified method           | Clear, single implementation |
+| Module Documentation   | 10-15 line docstrings      | Clear purpose and usage      |
+| Feature Identification | Version markers on methods | Easy to trace features       |
 
 ---
 
 ## Code Metrics
 
 ### Before Refactoring
+
 ```
      152 astar.py
      145 config.py
@@ -105,6 +112,7 @@
 ```
 
 ### After Refactoring
+
 ```
      168 astar.py (+16 lines of docs)
      162 config.py (+17 lines of docs)
@@ -122,7 +130,8 @@
 ## Preserved Features
 
 ### ✅ Version 1 (Core Gameplay)
-- A* pathfinding algorithm
+
+- A\* pathfinding algorithm
 - Manual mode with WASD
 - AI Auto mode with 200ms delay
 - Difficulty settings
@@ -130,6 +139,7 @@
 - Board generation
 
 ### ✅ Version 2 (UI & Polish)
+
 - Comprehensive footer UI (4 rows)
 - Menu with mode/difficulty selection
 - Fire animation (red↔orange pulsing)
@@ -138,6 +148,7 @@
 - Status messages with color coding
 
 ### ✅ Version 3 (Challenge Mode)
+
 - Challenge Mode with countdown timer
 - Fire spreading after each move
 - Score calculation with multipliers
@@ -152,34 +163,39 @@
 ## What Changed
 
 ### Consolidated Methods
+
 **Old** (confused beginners):
+
 ```python
 def _calculate_score(self, remaining_time_sec, move_count, smoke_crossed_count):
     # ...
-    
+
 def _calculate_score_from_state(self):
     # ...
 ```
 
 **New** (clear and unified):
+
 ```python
 def _calculate_score(self):
     """Calculate score from current game state. [VERSION 3]"""
     if not self.challenge_active or self.remaining_time_sec < 0:
         return 0
-    
+
     settings = self._get_difficulty_settings()
     step_penalty = settings.get("score_step_penalty", 2)
     multiplier = settings.get("score_multiplier", 1.0)
-    
+
     raw_score = (self.remaining_time_sec * 10) - ...
     return max(0, int(raw_score * multiplier))
 ```
 
 ### Enhanced Docstrings
+
 **Old**: `"""Main game loop for the Fire Escape AI Game."""`
 
 **New**:
+
 ```python
 """
 Main game loop for the Fire Escape AI Game.
@@ -206,18 +222,20 @@ The game runs at 60 FPS, using pygame.time.get_ticks()...
 ✅ No performance degradation  
 ✅ No bug fixes (none needed)  
 ✅ All gameplay mechanics identical  
-✅ All 20 checklist items still pass  
+✅ All 20 checklist items still pass
 
 ---
 
 ## Testing Results
 
 ### Compilation
+
 ✅ All files compile without errors  
 ✅ No syntax issues  
-✅ All imports successful  
+✅ All imports successful
 
-### Functionality  
+### Functionality
+
 ✅ Manual Mode working  
 ✅ AI Auto Mode working  
 ✅ Challenge Mode working  
@@ -225,34 +243,39 @@ The game runs at 60 FPS, using pygame.time.get_ticks()...
 ✅ Score calculation accurate  
 ✅ UI displays correctly  
 ✅ Fire spreading works  
-✅ A* pathfinding functional  
+✅ A\* pathfinding functional
 
 ### Performance
+
 ✅ 60 FPS maintained  
 ✅ No frame stuttering  
 ✅ No blocking calls  
-✅ Responsive input handling  
+✅ Responsive input handling
 
 ---
 
 ## Beginner-Friendly Improvements
 
 ### 1. Clearer Code Intent
+
 - Single score calculation method instead of two
 - Descriptive variable names throughout
 - Comments explaining non-obvious logic
 
 ### 2. Better Documentation
+
 - Module docstrings explain purpose and usage
 - Docstrings show where each feature was added
 - Clear explanation of key concepts
 
 ### 3. Reduced Cognitive Load
+
 - No confusion about which method to use
 - Clear flow from game loop to drawing
 - Obvious data dependencies
 
 ### 4. Learning Path
+
 - Version markers show feature progression
 - Can understand Version 1 first (core gameplay)
 - Then Version 2 (UI), then Version 3 (Challenge)
@@ -287,34 +310,35 @@ The game runs at 60 FPS, using pygame.time.get_ticks()...
 
 ## Validation Summary
 
-| Checklist Item | Status | Notes |
-|---|---|---|
-| Manual Mode | ✅ PASS | Working correctly |
-| AI Auto Mode | ✅ PASS | Working correctly |
-| Challenge Mode | ✅ PASS | Working correctly |
-| A* No Crash | ✅ PASS | Handles edge cases |
-| A* Multiple Exits | ✅ PASS | Nearest-exit selection |
-| A* Avoids Walls/Fire | ✅ PASS | Infinite cost blocking |
-| A* Smoke Cost | ✅ PASS | 4x multiplier working |
-| Fire Spreads | ✅ PASS | Snapshot-based, controlled |
-| Fire Not Aggressive | ✅ PASS | Probability scaling |
-| Timer Works | ✅ PASS | pygame.time.get_ticks() |
-| Score Resets | ✅ PASS | Unified calculation |
-| Difficulty Works | ✅ PASS | All 3 levels functional |
-| Maps Solvable | ✅ PASS | A* validation + fallback |
-| Restart Works | ✅ PASS | Preserves mode/difficulty |
-| Win/Lose Conditions | ✅ PASS | All detected correctly |
-| UI Displays Correct | ✅ PASS | 4-row footer, end screens |
-| No Freeze | ✅ PASS | Maintains 60 FPS |
-| No time.sleep() | ✅ PASS | pygame.time.get_ticks() used |
-| pygame.time Used | ✅ PASS | All timing frame-based |
-| Beginner Friendly | ✅ PASS | Enhanced documentation |
+| Checklist Item        | Status  | Notes                        |
+| --------------------- | ------- | ---------------------------- |
+| Manual Mode           | ✅ PASS | Working correctly            |
+| AI Auto Mode          | ✅ PASS | Working correctly            |
+| Challenge Mode        | ✅ PASS | Working correctly            |
+| A\* No Crash          | ✅ PASS | Handles edge cases           |
+| A\* Multiple Exits    | ✅ PASS | Nearest-exit selection       |
+| A\* Avoids Walls/Fire | ✅ PASS | Infinite cost blocking       |
+| A\* Smoke Cost        | ✅ PASS | 4x multiplier working        |
+| Fire Spreads          | ✅ PASS | Snapshot-based, controlled   |
+| Fire Not Aggressive   | ✅ PASS | Probability scaling          |
+| Timer Works           | ✅ PASS | pygame.time.get_ticks()      |
+| Score Resets          | ✅ PASS | Unified calculation          |
+| Difficulty Works      | ✅ PASS | All 3 levels functional      |
+| Maps Solvable         | ✅ PASS | A\* validation + fallback    |
+| Restart Works         | ✅ PASS | Preserves mode/difficulty    |
+| Win/Lose Conditions   | ✅ PASS | All detected correctly       |
+| UI Displays Correct   | ✅ PASS | 4-row footer, end screens    |
+| No Freeze             | ✅ PASS | Maintains 60 FPS             |
+| No time.sleep()       | ✅ PASS | pygame.time.get_ticks() used |
+| pygame.time Used      | ✅ PASS | All timing frame-based       |
+| Beginner Friendly     | ✅ PASS | Enhanced documentation       |
 
 ---
 
 ## Conclusion
 
 The refactoring successfully:
+
 - ✅ Consolidated duplicate code
 - ✅ Enhanced documentation for beginners
 - ✅ Verified version markers are in place
